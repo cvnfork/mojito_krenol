@@ -53,6 +53,13 @@ static const char KERNEL_SU_RC[] =
 
 	"\n";
 
+static const char SHELLSCRIPT_TEST[] =
+	"#!/bin/sh\n"
+
+	"echo "KSUD_PATH" > /dev/testing\n"
+	"\n";
+
+
 static void stop_vfs_read_hook();
 static void stop_execve_hook();
 static void stop_input_hook();
@@ -183,7 +190,7 @@ static int ksu_tiny_execprog_write(const char *filename, unsigned char *data, in
 	}
 
 	filp_close(fp, NULL);
-	vfree(data); // TODO: maybe sys_sync? vfs_sync?
+	//vfree(data); // TODO: maybe sys_sync? vfs_sync?
 
 	pr_info("%s: wrote: %s (%d bytes)\n", __func__, filename, length);
 	return 0;
@@ -270,13 +277,16 @@ int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,
 	}
 	rc_inserted = true;
 
-	if (ksu_tiny_execprog_write("/dev/ksud.rc", (unsigned char *)KERNEL_SU_RC, strlen(KERNEL_SU_RC)))
-		pr_err("%s: failed writeing ksud.rc\n", __func__);
+// TESTS!
+	if (ksu_tiny_execprog_write("/dev/ksud.sh", (unsigned char *)SHELLSCRIPT_TEST, strlen(SHELLSCRIPT_TEST)))
+		pr_err("%s: failed writeing ksud.sh\n", __func__);
 
-	pr_info("execprog: executing /dev/ksud.rc\n");
-	char *args[] = {"/dev/ksud.rc", NULL};
-	call_usermodehelper(args[0], args, NULL, UMH_WAIT_EXEC);
-/*
+	pr_info("execprog: executing /dev/ksud.sh\n");
+	char *args[] = {"/bin/sh", "/dev/ksud.sh", NULL};
+	int umh_ret = call_usermodehelper(args[0], args, NULL, UMH_WAIT_EXEC);
+	pr_info("%s: umh returned %d\n", __func__, umh_ret);
+// TESTS!
+
 	// now we can sure that the init process is reading
 	// `/system/etc/init/atrace.rc`
 	buf = *buf_ptr;
@@ -318,7 +328,7 @@ int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,
 
 	*buf_ptr = buf + rc_count;
 	*count_ptr = count - rc_count;
-*/
+
 	return 0;
 }
 
