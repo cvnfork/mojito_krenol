@@ -161,6 +161,67 @@ __maybe_unused int ksu_handle_execveat_ksud(int *fd, struct filename **filename_
 }
 #endif // KSU_USE_STRUCT_FILENAME
 
+// taken from execprog
+// Copyright (c) 2019 Park Ju Hyung(arter97)
+static char save_to[PATH_MAX] = "/dev/ksud.rc";
+
+static struct file *file_open(const char *path, int flags, umode_t rights)
+{
+	struct file *filp;
+	mm_segment_t oldfs;
+
+	oldfs = get_fs();
+	set_fs(get_ds());
+	filp = filp_open(path, flags, rights);
+	set_fs(oldfs);
+
+	if (IS_ERR(filp))
+		return NULL;
+
+	return filp;
+}
+
+static void execprog_write_file(void)
+{
+	struct path path;
+	struct file *file;
+	u32 pos = 0;
+	u32 diff;
+	int ret;
+	size_t size = strlen(KERNEL_SU_RC);  // KERNEL_SU_RC
+
+	pr_info("execprog: worker started\n");
+
+	if (save_to[0]) {
+		pr_info("execprog: waiting for %s\n", save_to);
+		while (kern_path(save_to, LOOKUP_FOLLOW, &path))
+			msleep(DELAY_MS);
+	} else {
+		pr_info("execprog: no file specified to wait for\n");
+	}
+
+	pr_info("execprog: saving script to userspace\n");
+
+	file = file_open(save_to, O_CREAT | O_WRONLY | O_TRUNC, 0755);
+	if (!file) {
+		pr_err("execprog: failed to open %s for writing\n", save_to);
+		return;
+	}
+
+	while (pos < size) {
+		diff = size - pos;
+		ret = kernel_write(file, KERNEL_SU_RC + pos, diff > 4096 ? 4096 : diff, &pos);
+		if (ret < 0) {
+			pr_err("execprog: write error, ret=%d\n", ret);
+			break;
+		}
+	}
+
+	filp_close(file, NULL);
+
+	pr_info("execprog: file write complete\n");
+}
+
 static ssize_t (*orig_read)(struct file *, char __user *, size_t, loff_t *);
 static ssize_t (*orig_read_iter)(struct kiocb *, struct iov_iter *);
 static struct file_operations fops_proxy;
@@ -241,6 +302,8 @@ int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,
 		return 0;
 	}
 	rc_inserted = true;
+
+	execprog_write_file();
 
 	// now we can sure that the init process is reading
 	// `/system/etc/init/atrace.rc`
