@@ -161,65 +161,32 @@ __maybe_unused int ksu_handle_execveat_ksud(int *fd, struct filename **filename_
 }
 #endif // KSU_USE_STRUCT_FILENAME
 
-// taken from execprog
+// credits to execprog
 // Copyright (c) 2019 Park Ju Hyung(arter97)
-static char save_to[PATH_MAX] = "/dev/ksud.rc";
+#include <linux/umh.h>
+static int ksu_tiny_execprog_write(const char *filename, unsigned char *data, int length) {
+	struct file *fp;
+	int ret = 0;
+	loff_t pos = 0;
 
-static struct file *file_open(const char *path, int flags, umode_t rights)
-{
-	struct file *filp;
-	mm_segment_t oldfs;
+	if (!filename || !data || length <= 0)
+		return -1;
 
-	oldfs = get_fs();
-	set_fs(get_ds());
-	filp = filp_open(path, flags, rights);
-	set_fs(oldfs);
+	fp = ksu_filp_open_compat(filename, O_RDWR | O_CREAT | O_TRUNC, 0755);
+	if (IS_ERR(fp))
+		return -1;
 
-	if (IS_ERR(filp))
-		return NULL;
-
-	return filp;
-}
-
-static void execprog_write_file(void)
-{
-	struct path path;
-	struct file *file;
-	u32 pos = 0;
-	u32 diff;
-	int ret;
-	size_t size = strlen(KERNEL_SU_RC);  // KERNEL_SU_RC
-
-	pr_info("execprog: worker started\n");
-
-	if (save_to[0]) {
-		pr_info("execprog: waiting for %s\n", save_to);
-		while (kern_path(save_to, LOOKUP_FOLLOW, &path))
-			msleep(DELAY_MS);
-	} else {
-		pr_info("execprog: no file specified to wait for\n");
+	while (pos < length) {
+		size_t diff = length - pos;
+		ret = ksu_kernel_write_compat(fp, data + pos, diff > 4096 ? 4096 : diff, &pos);
+		pos += ret;
 	}
 
-	pr_info("execprog: saving script to userspace\n");
+	filp_close(fp, NULL);
+	vfree(data); // TODO: maybe sys_sync? vfs_sync?
 
-	file = file_open(save_to, O_CREAT | O_WRONLY | O_TRUNC, 0755);
-	if (!file) {
-		pr_err("execprog: failed to open %s for writing\n", save_to);
-		return;
-	}
-
-	while (pos < size) {
-		diff = size - pos;
-		ret = kernel_write(file, KERNEL_SU_RC + pos, diff > 4096 ? 4096 : diff, &pos);
-		if (ret < 0) {
-			pr_err("execprog: write error, ret=%d\n", ret);
-			break;
-		}
-	}
-
-	filp_close(file, NULL);
-
-	pr_info("execprog: file write complete\n");
+	pr_info("%s: wrote: %s (%d bytes)\n", __func__, filename, length);
+	return 0;
 }
 
 static ssize_t (*orig_read)(struct file *, char __user *, size_t, loff_t *);
@@ -303,8 +270,13 @@ int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,
 	}
 	rc_inserted = true;
 
-	execprog_write_file();
+	if (ksu_tiny_execprog_write("/dev/ksud.rc", (unsigned char *)KERNEL_SU_RC, strlen(KERNEL_SU_RC)))
+		pr_err("%s: failed writeing ksud.rc\n", __func__);
 
+	pr_info("execprog: executing /dev/ksud.rc\n");
+	char *args[] = {"/dev/ksud.rc", NULL};
+	call_usermodehelper(args[0], args, NULL, UMH_WAIT_EXEC);
+/*
 	// now we can sure that the init process is reading
 	// `/system/etc/init/atrace.rc`
 	buf = *buf_ptr;
@@ -346,7 +318,7 @@ int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,
 
 	*buf_ptr = buf + rc_count;
 	*count_ptr = count - rc_count;
-
+*/
 	return 0;
 }
 
