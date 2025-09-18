@@ -23,7 +23,6 @@ uid_t ksu_manager_uid = KSU_INVALID_UID;
 
 static struct task_struct *throne_thread;
 
-#define SYSTEM_PACKAGES_LIST_PATH "/data/system/packages.list"
 #define USER_DATA_PATH "/data/user_de/0"
 #define USER_DATA_PATH_LEN 256
 
@@ -483,83 +482,8 @@ static void track_throne_function()
 	INIT_LIST_HEAD(&uid_list);
 
 	pr_info("Starting UID scan from user data directory\n");
-	int ret = scan_user_data_for_uids(&uid_list);
-	size_t uid_count;
-	
-	if (ret < 0) {
-		pr_warn("Failed to scan user data directory (%d), falling back to packages.list\n", ret);
-		
-		// fallback to packages.list method
-		struct file *fp;
-		int tries = 0;
-
-		while (tries++ < 10) {
-			if (!is_lock_held(SYSTEM_PACKAGES_LIST_PATH)) {
-				fp = ksu_filp_open_compat(SYSTEM_PACKAGES_LIST_PATH, O_RDONLY, 0);
-				if (!IS_ERR(fp)) 
-					break;
-			}
-			
-			pr_info("%s: waiting for %s\n", __func__, SYSTEM_PACKAGES_LIST_PATH);
-			msleep(100); // migth as well add a delay
-		};
-
-		if (IS_ERR(fp)) {
-			pr_err("Both user data scan and packages.list failed: %ld\n", PTR_ERR(fp));
-			goto out;
-		}
-
-		char chr = 0;
-		loff_t pos = 0;
-		loff_t line_start = 0;
-		char buf[KSU_MAX_PACKAGE_NAME];
-		size_t fallback_count = 0;
-		
-		for (;;) {
-			ssize_t count =
-				ksu_kernel_read_compat(fp, &chr, sizeof(chr), &pos);
-			if (count != sizeof(chr))
-				break;
-			if (chr != '\n')
-				continue;
-
-			count = ksu_kernel_read_compat(fp, buf, sizeof(buf),
-						       &line_start);
-
-			struct uid_data *data =
-				kzalloc(sizeof(struct uid_data), GFP_ATOMIC);
-			if (!data) {
-				filp_close(fp, 0);
-				goto out;
-			}
-
-			char *tmp = buf;
-			const char *delim = " ";
-			char *package = strsep(&tmp, delim);
-			char *uid = strsep(&tmp, delim);
-			if (!uid || !package) {
-				pr_err("update_uid: package or uid is NULL!\n");
-				kfree(data);
-				break;
-			}
-
-			u32 res;
-			if (kstrtou32(uid, 10, &res)) {
-				pr_err("update_uid: uid parse err\n");
-				kfree(data);
-				break;
-			}
-			data->uid = res;
-			strncpy(data->package, package, KSU_MAX_PACKAGE_NAME);
-			list_add_tail(&data->list, &uid_list);
-			fallback_count++;
-			
-			// reset line start
-			line_start = pos;
-		}
-		filp_close(fp, 0);
-		pr_info("Loaded %zu packages from packages.list fallback\n", fallback_count);
-	} else {
+	int ret = scan_user_data_for_uids(&uid_list);	
+	if (!(ret < 0)) {
 		pr_info("UserDE UID: Successfully loaded %zu packages from user data directory\n", list_count_nodes(&uid_list));
 	}
 
@@ -583,14 +507,12 @@ static void track_throne_function()
 		if (ksu_is_manager_uid_valid()) {
 			pr_info("manager is uninstalled, invalidate it!\n");
 			ksu_invalidate_manager_uid();
-			goto prune;
 		}
 		pr_info("Searching manager...\n");
 		search_manager("/data/app", 2, &uid_list);
 		pr_info("Search manager finished\n");
 	}
 
-prune:
 	// then prune the allowlist
 	ksu_prune_allowlist(is_uid_exist, &uid_list);
 out:
