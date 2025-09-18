@@ -2,7 +2,6 @@ kernelsu-objs := ksu.o
 kernelsu-objs += allowlist.o
 kernelsu-objs += apk_sign.o
 kernelsu-objs += sucompat.o
-kernelsu-objs += throne_tracker.o
 kernelsu-objs += core_hook.o
 kernelsu-objs += ksud.o
 kernelsu-objs += embed_ksud.o
@@ -11,6 +10,15 @@ kernelsu-objs += kernel_compat.o
 kernelsu-objs += selinux/selinux.o
 kernelsu-objs += selinux/sepolicy.o
 kernelsu-objs += selinux/rules.o
+
+ifeq ($(shell { [ $(VERSION) -lt 4 ] || [ "$CONFIG_KSU_THRONE_TRACKER_LEGACY" = "y" ]; } && echo $$?),0)
+$(info -- KernelSU/compat: using legacy throne tracker)
+kernelsu-objs += throne_tracker_legacy.o
+else
+$(info -- KernelSU/compat: using new throne tracker)
+kernelsu-objs += throne_tracker.o
+endif
+
 ccflags-y += -I$(srctree)/security/selinux -I$(srctree)/security/selinux/include
 ccflags-y += -I$(objtree)/security/selinux -include $(srctree)/include/uapi/asm-generic/errno.h
 
@@ -90,6 +98,11 @@ endif
 ifeq ($(shell grep -q "selinux_inode" $(srctree)/security/selinux/include/objsec.h; echo $$?),0)
 $(info -- KernelSU/compat: selinux_inode() found)
 ccflags-y += -DKSU_HAS_SELINUX_INODE
+endif
+
+ifeq ($(shell grep -A1 "^int vfs_getattr" $(srctree)/fs/stat.c | grep -q "query_flags" ; echo $$?),0)
+$(info -- KernelSU/compat: new vfs_getattr() found)
+ccflags-y += -DKSU_HAS_NEW_VFS_GETATTR
 endif
 
 ccflags-y += -Wno-implicit-function-declaration -Wno-strict-prototypes -Wno-int-conversion -Wno-gcc-compat
