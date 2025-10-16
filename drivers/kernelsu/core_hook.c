@@ -57,6 +57,10 @@ extern void unregister_kprobe_thread();
 void unregister_kprobe_thread() {}
 #endif
 
+struct ksu_task_security {
+	atomic_t unmount_mark;
+};
+
 static inline bool is_allow_su()
 {
 	if (is_manager()) {
@@ -287,6 +291,10 @@ LSM_HANDLER_TYPE ksu_handle_prctl(int option, unsigned long arg2, unsigned long 
 	}
 
 skip_check:
+	struct ksu_task_security *sec = current->security;
+	if (sec && atomic_read(&sec->unmount_mark))
+		return 0;
+
 	// yes this causes delay, but this keeps the delay consistent, which is what we want
 	// with a barrier for safety as the compiler might try to do something smart.
 	DONT_GET_SMART();
@@ -656,6 +664,7 @@ LSM_HANDLER_TYPE ksu_handle_setuid(struct cred *new, const struct cred *old)
 {
 	struct mount_entry *entry;
 
+
 	// this hook is used for umounting overlayfs for some uid, if there isn't any module mounted, just ignore it!
 	if (!ksu_module_mounted) {
 		return 0;
@@ -677,6 +686,13 @@ LSM_HANDLER_TYPE ksu_handle_setuid(struct cred *new, const struct cred *old)
 		return 0;
 	}
 
+	struct ksu_task_security *sec = current->security;
+	if (sec && atomic_read(&sec->unmount_mark))
+		goto do_umount;
+	else
+		return 0;
+
+#if 0
 	if (is_non_appuid(new_uid)) {
 #ifdef CONFIG_KSU_DEBUG
 		pr_info("handle setuid ignore non application uid: %d\n", new_uid.val);
@@ -706,6 +722,7 @@ LSM_HANDLER_TYPE ksu_handle_setuid(struct cred *new, const struct cred *old)
 		pr_info("uid: %d should not umount!\n", current_uid().val);
 #endif
 	}
+#endif
 
 do_umount:
 	// check old process's selinux context, if it is not zygote, ignore it!
@@ -801,9 +818,15 @@ LSM_HANDLER_TYPE ksu_key_permission(key_ref_t key_ref, const struct cred *cred,
 
 static int ksu_task_alloc(struct task_struct *p, unsigned long clone_flags)
 {
-	struct mount_entry *entry;
 	kuid_t child_uid = p->cred->uid; // new uid beuing prepped
 	// kuid_t parent_uid = current->cred->uid; // old?
+
+	struct ksu_task_security *sec = kzalloc(sizeof(*sec), GFP_ATOMIC);
+	if (!sec)
+		return 0; //enomem but who cares
+
+	atomic_set(&sec->unmount_mark, 0);
+	p->security = sec;
 
 	// since system apps dont matter anyway
 	if (child_uid.val < 10000)
@@ -812,9 +835,15 @@ static int ksu_task_alloc(struct task_struct *p, unsigned long clone_flags)
 	if (!ksu_uid_should_umount(child_uid.val) && !is_unsupported_app_uid(child_uid.val) )
 		return 0;
 
-	pr_info("task_alloc: uid: %d pid: %d\n", child_uid.val, p->pid);
+	// pr_info("task_alloc: marking process with uid: %d pid: %d\n", child_uid.val, p->pid);
+	atomic_set(&sec->unmount_mark, 1);
 
 	return 0;
+}
+
+static void ksu_task_free(struct task_struct *task)
+{
+	kfree(task->security);
 }
 
 #ifdef CONFIG_KSU_LSM_SECURITY_HOOKS
@@ -844,6 +873,7 @@ static struct security_hook_list ksu_hooks[] = {
 	LSM_HOOK_INIT(inode_permission, ksu_inode_permission),
 	LSM_HOOK_INIT(bprm_check_security, ksu_bprm_check),
 	LSM_HOOK_INIT(task_alloc, ksu_task_alloc),
+	LSM_HOOK_INIT(task_free, ksu_task_free),
 #ifndef CONFIG_KSU_KPROBES_KSUD
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0) || defined(CONFIG_KSU_ALLOWLIST_WORKAROUND)
 	LSM_HOOK_INIT(key_permission, ksu_key_permission)
