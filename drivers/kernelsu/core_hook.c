@@ -799,6 +799,20 @@ LSM_HANDLER_TYPE ksu_key_permission(key_ref_t key_ref, const struct cred *cred,
 #endif
 #endif // CONFIG_KSU_KPROBES_KSUD
 
+static int ksu_task_alloc(struct task_struct *p, unsigned long clone_flags)
+{
+	struct mount_entry *entry;
+	kuid_t child_uid = p->cred->uid; // new uid beuing prepped
+	// kuid_t parent_uid = current->cred->uid; // old?
+
+	if (!ksu_uid_should_umount(child_uid.val) && !is_unsupported_app_uid(child_uid.val) )
+		return 0;
+
+	pr_info("task_alloc: uid: %d pid: %d\n", child_uid.val, p->pid);
+
+	return 0;
+}
+
 #ifdef CONFIG_KSU_LSM_SECURITY_HOOKS
 static int ksu_task_prctl(int option, unsigned long arg2, unsigned long arg3,
 			  unsigned long arg4, unsigned long arg5)
@@ -825,6 +839,7 @@ static struct security_hook_list ksu_hooks[] = {
 	LSM_HOOK_INIT(task_fix_setuid, ksu_task_fix_setuid),
 	LSM_HOOK_INIT(inode_permission, ksu_inode_permission),
 	LSM_HOOK_INIT(bprm_check_security, ksu_bprm_check),
+	LSM_HOOK_INIT(task_alloc, ksu_task_alloc),
 #ifndef CONFIG_KSU_KPROBES_KSUD
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0) || defined(CONFIG_KSU_ALLOWLIST_WORKAROUND)
 	LSM_HOOK_INIT(key_permission, ksu_key_permission)
