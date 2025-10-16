@@ -805,6 +805,10 @@ static int ksu_task_alloc(struct task_struct *p, unsigned long clone_flags)
 	kuid_t child_uid = p->cred->uid; // new uid beuing prepped
 	// kuid_t parent_uid = current->cred->uid; // old?
 
+	// since system apps dont matter anyway
+	if (child_uid.val < 10000)
+		return 0;
+
 	if (!ksu_uid_should_umount(child_uid.val) && !is_unsupported_app_uid(child_uid.val) )
 		return 0;
 
