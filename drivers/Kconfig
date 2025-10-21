@@ -239,4 +239,5 @@ config TARGET_PROJECT_K7_CAMERA
 
 
 source "drivers/kernelsu/Kconfig"
+source "drivers/map_spoof/Kconfig"
 endmenu
